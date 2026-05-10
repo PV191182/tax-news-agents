@@ -463,10 +463,40 @@ def agent_turn(messages: list, placeholder, fmt: str | None = None) -> list:
 # Session state
 # ---------------------------------------------------------------------------
 
-if "messages"       not in st.session_state: st.session_state.messages       = []
-if "left_items"     not in st.session_state: st.session_state.left_items     = []
-if "pending_q"      not in st.session_state: st.session_state.pending_q      = None
+if "messages"        not in st.session_state: st.session_state.messages        = []
+if "left_items"      not in st.session_state: st.session_state.left_items      = []
+if "pending_q"       not in st.session_state: st.session_state.pending_q       = None
 if "awaiting_format" not in st.session_state: st.session_state.awaiting_format = None
+if "chosen_fmt"      not in st.session_state: st.session_state.chosen_fmt      = None
+
+# ---------------------------------------------------------------------------
+# Format chooser dialog
+# ---------------------------------------------------------------------------
+
+@st.dialog("How would you like to see this?", width="small")
+def format_chooser_dialog():
+    q = st.session_state.awaiting_format
+    st.markdown(
+        f'<div style="background:#f0f4ff;border-left:3px solid #2563eb;padding:10px 14px;'
+        f'border-radius:0 8px 8px 0;margin-bottom:16px;font-size:13px;color:#334155;'
+        f'line-height:1.5">{q}</div>',
+        unsafe_allow_html=True,
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("📋 Table", use_container_width=True, type="secondary", key="dlg_table"):
+            st.session_state.chosen_fmt      = "table"
+            st.session_state.awaiting_format = None
+            st.rerun()
+    with c2:
+        if st.button("📊 Graph", use_container_width=True, type="primary", key="dlg_graph"):
+            st.session_state.chosen_fmt      = "graph"
+            st.session_state.awaiting_format = None
+            st.rerun()
+
+# Open format dialog whenever a question is waiting for a format choice
+if st.session_state.awaiting_format:
+    format_chooser_dialog()
 
 # ---------------------------------------------------------------------------
 # ── HEADER ──
@@ -654,40 +684,27 @@ with col_chat:
         st.session_state.awaiting_format = new_question
         st.rerun()
 
-    # Format chooser — shown after a question is submitted
-    if st.session_state.awaiting_format:
-        st.markdown(
-            '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;'
-            'padding:8px 10px;margin:6px 0 4px;">'
-            '<span style="color:#475569;font-size:11px;font-weight:600">How would you like to see this?</span>'
-            '</div>',
-            unsafe_allow_html=True,
+    # Run agent once the user has picked a format via the dialog
+    if st.session_state.chosen_fmt:
+        chosen_fmt = st.session_state.chosen_fmt
+        st.session_state.chosen_fmt = None
+        question = next(
+            (m["content"] for m in reversed(st.session_state.messages)
+             if m["role"] == "user" and isinstance(m["content"], str)),
+            ""
         )
-        fmt_t, fmt_g = st.columns(2)
-        chosen_fmt = None
-        with fmt_t:
-            if st.button("📋 Table", key="fmt_table", use_container_width=True, type="secondary"):
-                chosen_fmt = "table"
-        with fmt_g:
-            if st.button("📊 Graph", key="fmt_graph", use_container_width=True, type="secondary"):
-                chosen_fmt = "graph"
+        # Auto-clear after 5 assistant responses
+        if sum(1 for m in st.session_state.messages if m["role"] == "assistant") >= 5:
+            st.session_state.messages = [{"role": "user", "content": question}]
 
-        if chosen_fmt:
-            question = st.session_state.awaiting_format
-            st.session_state.awaiting_format = None
-
-            # Auto-clear after 5 assistant responses
-            if sum(1 for m in st.session_state.messages if m["role"] == "assistant") >= 5:
-                st.session_state.messages = [{"role": "user", "content": question}]
-
-            with st.container(border=True):
-                st.markdown(
-                    '<span class="msg-label" style="background:#7c3aed">Output</span>',
-                    unsafe_allow_html=True,
+        with st.container(border=True):
+            st.markdown(
+                '<span class="msg-label" style="background:#7c3aed">Output</span>',
+                unsafe_allow_html=True,
+            )
+            placeholder = st.empty()
+            with st.spinner("Analyzing..."):
+                st.session_state.messages = agent_turn(
+                    list(st.session_state.messages), placeholder, fmt=chosen_fmt
                 )
-                placeholder = st.empty()
-                with st.spinner("Analyzing..."):
-                    st.session_state.messages = agent_turn(
-                        list(st.session_state.messages), placeholder, fmt=chosen_fmt
-                    )
-            st.rerun()
+        st.rerun()
