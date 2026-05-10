@@ -13,8 +13,7 @@ import streamlit as st
 import anthropic
 
 # ── CONFIGURE YOUR FILE HERE ─────────────────────────────────────────────────
-EXCEL_FILE = r"C:\Users\phani\Downloads\your_data.xlsx"   # ← set this path
-SHEET_NAME = 0                                             # sheet index or name
+EXCEL_FILE = r"C:\Users\phani\Downloads\PDT Analysis- Conley - Main.xlsx"
 # ─────────────────────────────────────────────────────────────────────────────
 
 client = anthropic.Anthropic()
@@ -57,11 +56,12 @@ st.markdown("""
 # ---------------------------------------------------------------------------
 
 @st.cache_data
-def load_data() -> pd.DataFrame:
-    return pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+def load_all_sheets() -> dict[str, pd.DataFrame]:
+    return pd.read_excel(EXCEL_FILE, sheet_name=None)  # all sheets
 
 try:
-    df = load_data()
+    sheets = load_all_sheets()           # {sheet_name: DataFrame}
+    df     = list(sheets.values())[0]   # primary sheet for metrics/charts default
 except FileNotFoundError:
     st.error(f"File not found: `{EXCEL_FILE}`  \nUpdate the `EXCEL_FILE` path at the top of `excel_agent.py`.")
     st.stop()
@@ -74,8 +74,10 @@ TOOLS = [
     {
         "name": "query_data",
         "description": (
-            "Execute pandas code to query, filter, aggregate, or compute statistics. "
-            "The dataframe is `df`. Assign output to `result`."
+            "Execute pandas code across any sheet. "
+            "`sheets` is a dict of {sheet_name: DataFrame}. "
+            "Individual sheets are also available as variables named by their sheet name (spaces replaced with _). "
+            "Assign output to `result`."
         ),
         "input_schema": {
             "type": "object",
@@ -83,8 +85,9 @@ TOOLS = [
                 "code": {
                     "type": "string",
                     "description": (
-                        "Pandas code. `df`, `pd`, `np` are available. "
-                        "Must set `result`. E.g.: `result = df.groupby('Region')['Sales'].sum()`"
+                        "Pandas code. `sheets`, `pd`, `np` are available. "
+                        "Access a sheet via `sheets['Sheet1']` or its variable name. "
+                        "Must set `result`. E.g.: `result = sheets['Sales'].groupby('Region')['Revenue'].sum()`"
                     ),
                 }
             },
@@ -93,10 +96,11 @@ TOOLS = [
     },
     {
         "name": "create_chart",
-        "description": "Create an interactive Plotly chart from the dataframe.",
+        "description": "Create an interactive Plotly chart from any sheet.",
         "input_schema": {
             "type": "object",
             "properties": {
+                "sheet_name": {"type": "string", "description": "Sheet name to chart from. Defaults to the first sheet."},
                 "chart_type": {
                     "type": "string",
                     "enum": ["bar", "line", "scatter", "pie", "histogram", "box", "area"],
@@ -122,7 +126,12 @@ TOOLS = [
 
 
 def run_query(code: str) -> str:
-    local_ns: dict = {"df": df.copy(), "pd": pd, "np": np}
+    local_ns: dict = {"sheets": sheets, "pd": pd, "np": np}
+    # expose each sheet as a sanitised variable name
+    for name, sdf in sheets.items():
+        var = name.replace(" ", "_").replace("-", "_")
+        local_ns[var] = sdf
+    local_ns["df"] = df  # primary sheet shortcut
     try:
         exec(code, local_ns)  # noqa: S102
         result = local_ns.get("result")
@@ -138,13 +147,14 @@ def run_query(code: str) -> str:
 
 
 def run_chart(params: dict):
-    chart_type = params.get("chart_type", "bar")
-    x, y      = params.get("x"), params.get("y")
-    color     = params.get("color")
-    title     = params.get("title", "Chart")
-    agg_func  = params.get("agg_func", "none")
+    chart_type  = params.get("chart_type", "bar")
+    sheet_name  = params.get("sheet_name")
+    x, y        = params.get("x"), params.get("y")
+    color       = params.get("color")
+    title       = params.get("title", "Chart")
+    agg_func    = params.get("agg_func", "none")
     try:
-        plot_df = df.copy()
+        plot_df = (sheets.get(sheet_name) if sheet_name and sheet_name in sheets else df).copy()
         if agg_func != "none" and x and y:
             group_cols = [c for c in [x, color] if c]
             plot_df = plot_df.groupby(group_cols)[y].agg(agg_func).reset_index()
@@ -172,20 +182,26 @@ def run_chart(params: dict):
 # ---------------------------------------------------------------------------
 
 def data_summary() -> str:
-    buf = io.StringIO()
-    df.info(buf=buf)
-    return (
-        f"Shape: {df.shape[0]:,} rows × {df.shape[1]} columns\n"
-        f"Columns & dtypes:\n{buf.getvalue()}\n"
-        f"First 5 rows:\n{df.head().to_string()}\n\n"
-        f"Statistics:\n{df.describe(include='all').to_string()}"
-    )
+    parts = []
+    for name, sdf in sheets.items():
+        buf = io.StringIO()
+        sdf.info(buf=buf)
+        parts.append(
+            f"--- Sheet: '{name}' ({sdf.shape[0]:,} rows × {sdf.shape[1]} cols) ---\n"
+            f"Columns & dtypes:\n{buf.getvalue()}\n"
+            f"First 3 rows:\n{sdf.head(3).to_string()}\n"
+            f"Statistics:\n{sdf.describe(include='all').to_string()}"
+        )
+    return "\n\n".join(parts)
 
 SYSTEM = (
-    "You are an expert data analyst. The user has an Excel dataset:\n\n"
+    f"You are an expert data analyst. The Excel workbook has {len(sheets)} sheet(s): "
+    f"{', '.join(repr(n) for n in sheets)}.\n\n"
     + data_summary()
-    + "\n\nAlways use query_data for accurate numbers. Use create_chart when the user "
-    "asks for a chart or when a visualization adds insight. Keep answers concise."
+    + "\n\nAccess sheets via `sheets['name']` in query_data code. "
+    "Always use query_data for accurate numbers. "
+    "Use create_chart when the user asks for a chart or a visual would add insight. "
+    "Keep answers concise."
 )
 
 # ---------------------------------------------------------------------------
@@ -248,13 +264,16 @@ if "charts" not in st.session_state:
 # Layout: title row
 # ---------------------------------------------------------------------------
 
-st.markdown(f"## 📊 Data Intelligence &nbsp;<sub style='font-size:13px;color:#888'>{EXCEL_FILE.split('\\')[-1]} · {df.shape[0]:,} rows × {df.shape[1]} cols</sub>", unsafe_allow_html=True)
+sheet_summary = " | ".join(f"{n}: {sdf.shape[0]:,}r×{sdf.shape[1]}c" for n, sdf in sheets.items())
+st.markdown(f"## 📊 Data Intelligence &nbsp;<sub style='font-size:13px;color:#888'>{EXCEL_FILE.split(chr(92))[-1]} · {len(sheets)} sheet(s) · {sheet_summary}</sub>", unsafe_allow_html=True)
 
 # Key metric cards
-metric_cols = st.columns(min(len(df.select_dtypes("number").columns), 5))
-for i, col in enumerate(df.select_dtypes("number").columns[:5]):
-    with metric_cols[i]:
-        st.metric(col, f"{df[col].sum():,.0f}", f"avg {df[col].mean():,.1f}")
+numeric_cols = df.select_dtypes("number").columns[:5].tolist()
+if numeric_cols:
+    metric_cols = st.columns(len(numeric_cols))
+    for i, col in enumerate(numeric_cols):
+        with metric_cols[i]:
+            st.metric(col, f"{df[col].sum():,.0f}", f"avg {df[col].mean():,.1f}")
 
 st.divider()
 
