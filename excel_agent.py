@@ -470,35 +470,6 @@ if "awaiting_format" not in st.session_state: st.session_state.awaiting_format =
 if "chosen_fmt"      not in st.session_state: st.session_state.chosen_fmt      = None
 
 # ---------------------------------------------------------------------------
-# Format chooser dialog
-# ---------------------------------------------------------------------------
-
-@st.dialog("How would you like to see this?", width="small")
-def format_chooser_dialog():
-    q = st.session_state.awaiting_format
-    st.markdown(
-        f'<div style="background:#f0f4ff;border-left:3px solid #2563eb;padding:10px 14px;'
-        f'border-radius:0 8px 8px 0;margin-bottom:16px;font-size:13px;color:#334155;'
-        f'line-height:1.5">{q}</div>',
-        unsafe_allow_html=True,
-    )
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("📋 Table", use_container_width=True, type="secondary", key="dlg_table"):
-            st.session_state.chosen_fmt      = "table"
-            st.session_state.awaiting_format = None
-            st.rerun()
-    with c2:
-        if st.button("📊 Graph", use_container_width=True, type="primary", key="dlg_graph"):
-            st.session_state.chosen_fmt      = "graph"
-            st.session_state.awaiting_format = None
-            st.rerun()
-
-# Open format dialog whenever a question is waiting for a format choice
-if st.session_state.awaiting_format:
-    format_chooser_dialog()
-
-# ---------------------------------------------------------------------------
 # ── HEADER ──
 # ---------------------------------------------------------------------------
 
@@ -525,6 +496,30 @@ st.markdown(f"""
 # ---------------------------------------------------------------------------
 # ── METRIC CARDS ──
 # ---------------------------------------------------------------------------
+
+# ── FORMAT CHOOSER BANNER ────────────────────────────────────────────────────
+if st.session_state.awaiting_format:
+    q = st.session_state.awaiting_format
+    banner_q, banner_t, banner_g = st.columns([5, 1, 1])
+    with banner_q:
+        st.markdown(
+            f'<div style="background:#fffbeb;border:1.5px solid #f59e0b;border-radius:8px;'
+            f'padding:10px 16px;font-size:13px;color:#334155;font-weight:500;line-height:1.4">'
+            f'<span style="color:#d97706;font-weight:700;margin-right:8px">❓</span>{q}'
+            f'<span style="color:#94a3b8;font-size:11px;margin-left:12px">— How would you like to see this?</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with banner_t:
+        if st.button("📋 Table", key="fmt_table", use_container_width=True, type="secondary"):
+            st.session_state.chosen_fmt      = "table"
+            st.session_state.awaiting_format = None
+            st.rerun()
+    with banner_g:
+        if st.button("📊 Graph", key="fmt_graph", use_container_width=True, type="primary"):
+            st.session_state.chosen_fmt      = "graph"
+            st.session_state.awaiting_format = None
+            st.rerun()
 
 numeric_cols = df.select_dtypes("number").columns[:5].tolist()
 if numeric_cols:
